@@ -1,246 +1,188 @@
-pragma solidity ^0.4.8;
-contract CryptoPunksMarket {
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.17;
 
-    // You can use this hash to verify the image file containing all the punks
-    string public imageHash = "ac39af4793119ee46bbff351d8cb6b5f23da60222126add4268e261199a2921b";
+interface IERC165 {
+    function supportsInterface(bytes4 interfaceID) external view returns (bool);
+}
 
-    address owner;
+interface IERC721 is IERC165 {
+    function balanceOf(address owner) external view returns (uint balance);
 
-    string public standard = 'CryptoPunks';
-    string public name;
-    string public symbol;
-    uint8 public decimals;
-    uint256 public totalSupply;
+    function ownerOf(uint tokenId) external view returns (address owner);
 
-    uint public nextPunkIndexToAssign = 0;
+    function safeTransferFrom(address from, address to, uint tokenId) external;
 
-    bool public allPunksAssigned = false;
-    uint public punksRemainingToAssign = 0;
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint tokenId,
+        bytes calldata data
+    ) external;
 
-    //mapping (address => uint) public addressToPunkIndex;
-    mapping (uint => address) public punkIndexToAddress;
+    function transferFrom(address from, address to, uint tokenId) external;
 
-    /* This creates an array with all balances */
-    mapping (address => uint256) public balanceOf;
+    function approve(address to, uint tokenId) external;
 
-    struct Offer {
-        bool isForSale;
-        uint punkIndex;
-        address seller;
-        uint minValue;          // in ether
-        address onlySellTo;     // specify to sell only to a specific person
+    function getApproved(uint tokenId) external view returns (address operator);
+
+    function setApprovalForAll(address operator, bool _approved) external;
+
+    function isApprovedForAll(
+        address owner,
+        address operator
+    ) external view returns (bool);
+}
+
+interface IERC721Receiver {
+    function onERC721Received(
+        address operator,
+        address from,
+        uint tokenId,
+        bytes calldata data
+    ) external returns (bytes4);
+}
+
+contract ERC721 is IERC721 {
+    event Transfer(address indexed from, address indexed to, uint indexed id);
+    event Approval(address indexed owner, address indexed spender, uint indexed id);
+    event ApprovalForAll(
+        address indexed owner,
+        address indexed operator,
+        bool approved
+    );
+
+    // Mapping from token ID to owner address
+    mapping(uint => address) internal _ownerOf;
+
+    // Mapping owner address to token count
+    mapping(address => uint) internal _balanceOf;
+
+    // Mapping from token ID to approved address
+    mapping(uint => address) internal _approvals;
+
+    // Mapping from owner to operator approvals
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return
+            interfaceId == type(IERC721).interfaceId ||
+            interfaceId == type(IERC165).interfaceId;
     }
 
-    struct Bid {
-        bool hasBid;
-        uint punkIndex;
-        address bidder;
-        uint value;
+    function ownerOf(uint id) external view returns (address owner) {
+        owner = _ownerOf[id];
+        require(owner != address(0), "token doesn't exist");
     }
 
-    // A record of punks that are offered for sale at a specific minimum value, and perhaps to a specific person
-    mapping (uint => Offer) public punksOfferedForSale;
-
-    // A record of the highest punk bid
-    mapping (uint => Bid) public punkBids;
-
-    mapping (address => uint) public pendingWithdrawals;
-
-    event Assign(address indexed to, uint256 punkIndex);
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event PunkTransfer(address indexed from, address indexed to, uint256 punkIndex);
-    event PunkOffered(uint indexed punkIndex, uint minValue, address indexed toAddress);
-    event PunkBidEntered(uint indexed punkIndex, uint value, address indexed fromAddress);
-    event PunkBidWithdrawn(uint indexed punkIndex, uint value, address indexed fromAddress);
-    event PunkBought(uint indexed punkIndex, uint value, address indexed fromAddress, address indexed toAddress);
-    event PunkNoLongerForSale(uint indexed punkIndex);
-
-    /* Initializes contract with initial supply tokens to the creator of the contract */
-    function CryptoPunksMarket() payable {
-        //        balanceOf[msg.sender] = initialSupply;              // Give the creator all initial tokens
-        owner = msg.sender;
-        totalSupply = 10000;                        // Update total supply
-        punksRemainingToAssign = totalSupply;
-        name = "CRYPTOPUNKS";                                   // Set the name for display purposes
-        symbol = "Ͼ";                               // Set the symbol for display purposes
-        decimals = 0;                                       // Amount of decimals for display purposes
+    function balanceOf(address owner) external view returns (uint) {
+        require(owner != address(0), "owner = zero address");
+        return _balanceOf[owner];
     }
 
-    function setInitialOwner(address to, uint punkIndex) {
-        if (msg.sender != owner) throw;
-        if (allPunksAssigned) throw;
-        if (punkIndex >= 10000) throw;
-        if (punkIndexToAddress[punkIndex] != to) {
-            if (punkIndexToAddress[punkIndex] != 0x0) {
-                balanceOf[punkIndexToAddress[punkIndex]]--;
-            } else {
-                punksRemainingToAssign--;
-            }
-            punkIndexToAddress[punkIndex] = to;
-            balanceOf[to]++;
-            Assign(to, punkIndex);
-        }
+    function setApprovalForAll(address operator, bool approved) external {
+        isApprovedForAll[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
     }
 
-    function setInitialOwners(address[] addresses, uint[] indices) {
-        if (msg.sender != owner) throw;
-        uint n = addresses.length;
-        for (uint i = 0; i < n; i++) {
-            setInitialOwner(addresses[i], indices[i]);
-        }
+    function approve(address spender, uint id) external {
+        address owner = _ownerOf[id];
+        require(
+            msg.sender == owner || isApprovedForAll[owner][msg.sender],
+            "not authorized"
+        );
+
+        _approvals[id] = spender;
+
+        emit Approval(owner, spender, id);
     }
 
-    function allInitialOwnersAssigned() {
-        if (msg.sender != owner) throw;
-        allPunksAssigned = true;
+    function getApproved(uint id) external view returns (address) {
+        require(_ownerOf[id] != address(0), "token doesn't exist");
+        return _approvals[id];
     }
 
-    function getPunk(uint punkIndex) {
-        if (!allPunksAssigned) throw;
-        if (punksRemainingToAssign == 0) throw;
-        if (punkIndexToAddress[punkIndex] != 0x0) throw;
-        if (punkIndex >= 10000) throw;
-        punkIndexToAddress[punkIndex] = msg.sender;
-        balanceOf[msg.sender]++;
-        punksRemainingToAssign--;
-        Assign(msg.sender, punkIndex);
+    function _isApprovedOrOwner(
+        address owner,
+        address spender,
+        uint id
+    ) internal view returns (bool) {
+        return (spender == owner ||
+            isApprovedForAll[owner][spender] ||
+            spender == _approvals[id]);
     }
 
-    // Transfer ownership of a punk to another user without requiring payment
-    function transferPunk(address to, uint punkIndex) {
-        if (!allPunksAssigned) throw;
-        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
-        if (punkIndex >= 10000) throw;
-        if (punksOfferedForSale[punkIndex].isForSale) {
-            punkNoLongerForSale(punkIndex);
-        }
-        punkIndexToAddress[punkIndex] = to;
-        balanceOf[msg.sender]--;
-        balanceOf[to]++;
-        Transfer(msg.sender, to, 1);
-        PunkTransfer(msg.sender, to, punkIndex);
-        // Check for the case where there is a bid from the new owner and refund it.
-        // Any other bid can stay in place.
-        Bid bid = punkBids[punkIndex];
-        if (bid.bidder == to) {
-            // Kill bid and refund value
-            pendingWithdrawals[to] += bid.value;
-            punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
-        }
+    function transferFrom(address from, address to, uint id) public {
+        require(from == _ownerOf[id], "from != owner");
+        require(to != address(0), "transfer to zero address");
+
+        require(_isApprovedOrOwner(from, msg.sender, id), "not authorized");
+
+        _balanceOf[from]--;
+        _balanceOf[to]++;
+        _ownerOf[id] = to;
+
+        delete _approvals[id];
+
+        emit Transfer(from, to, id);
     }
 
-    function punkNoLongerForSale(uint punkIndex) {
-        if (!allPunksAssigned) throw;
-        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
-        if (punkIndex >= 10000) throw;
-        punksOfferedForSale[punkIndex] = Offer(false, punkIndex, msg.sender, 0, 0x0);
-        PunkNoLongerForSale(punkIndex);
+    function safeTransferFrom(address from, address to, uint id) external {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                IERC721Receiver(to).onERC721Received(msg.sender, from, id, "") ==
+                IERC721Receiver.onERC721Received.selector,
+            "unsafe recipient"
+        );
     }
 
-    function offerPunkForSale(uint punkIndex, uint minSalePriceInWei) {
-        if (!allPunksAssigned) throw;
-        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
-        if (punkIndex >= 10000) throw;
-        punksOfferedForSale[punkIndex] = Offer(true, punkIndex, msg.sender, minSalePriceInWei, 0x0);
-        PunkOffered(punkIndex, minSalePriceInWei, 0x0);
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint id,
+        bytes calldata data
+    ) external {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                IERC721Receiver(to).onERC721Received(msg.sender, from, id, data) ==
+                IERC721Receiver.onERC721Received.selector,
+            "unsafe recipient"
+        );
     }
 
-    function offerPunkForSaleToAddress(uint punkIndex, uint minSalePriceInWei, address toAddress) {
-        if (!allPunksAssigned) throw;
-        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
-        if (punkIndex >= 10000) throw;
-        punksOfferedForSale[punkIndex] = Offer(true, punkIndex, msg.sender, minSalePriceInWei, toAddress);
-        PunkOffered(punkIndex, minSalePriceInWei, toAddress);
+    function _mint(address to, uint id) internal {
+        require(to != address(0), "mint to zero address");
+        require(_ownerOf[id] == address(0), "already minted");
+
+        _balanceOf[to]++;
+        _ownerOf[id] = to;
+
+        emit Transfer(address(0), to, id);
     }
 
-    function buyPunk(uint punkIndex) payable {
-        if (!allPunksAssigned) throw;
-        Offer offer = punksOfferedForSale[punkIndex];
-        if (punkIndex >= 10000) throw;
-        if (!offer.isForSale) throw;                // punk not actually for sale
-        if (offer.onlySellTo != 0x0 && offer.onlySellTo != msg.sender) throw;  // punk not supposed to be sold to this user
-        if (msg.value < offer.minValue) throw;      // Didn't send enough ETH
-        if (offer.seller != punkIndexToAddress[punkIndex]) throw; // Seller no longer owner of punk
+    function _burn(uint id) internal {
+        address owner = _ownerOf[id];
+        require(owner != address(0), "not minted");
 
-        address seller = offer.seller;
+        _balanceOf[owner] -= 1;
 
-        punkIndexToAddress[punkIndex] = msg.sender;
-        balanceOf[seller]--;
-        balanceOf[msg.sender]++;
-        Transfer(seller, msg.sender, 1);
+        delete _ownerOf[id];
+        delete _approvals[id];
 
-        punkNoLongerForSale(punkIndex);
-        pendingWithdrawals[seller] += msg.value;
-        PunkBought(punkIndex, msg.value, seller, msg.sender);
+        emit Transfer(owner, address(0), id);
+    }
+}
 
-        // Check for the case where there is a bid from the new owner and refund it.
-        // Any other bid can stay in place.
-        Bid bid = punkBids[punkIndex];
-        if (bid.bidder == msg.sender) {
-            // Kill bid and refund value
-            pendingWithdrawals[msg.sender] += bid.value;
-            punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
-        }
+contract MyNFT is ERC721 {
+    function mint(address to, uint id) external {
+        _mint(to, id);
     }
 
-    function withdraw() {
-        if (!allPunksAssigned) throw;
-        uint amount = pendingWithdrawals[msg.sender];
-        // Remember to zero the pending refund before
-        // sending to prevent re-entrancy attacks
-        pendingWithdrawals[msg.sender] = 0;
-        msg.sender.transfer(amount);
+    function burn(uint id) external {
+        require(msg.sender == _ownerOf[id], "not owner");
+        _burn(id);
     }
-
-    function enterBidForPunk(uint punkIndex) payable {
-        if (punkIndex >= 10000) throw;
-        if (!allPunksAssigned) throw;                
-        if (punkIndexToAddress[punkIndex] == 0x0) throw;
-        if (punkIndexToAddress[punkIndex] == msg.sender) throw;
-        if (msg.value == 0) throw;
-        Bid existing = punkBids[punkIndex];
-        if (msg.value <= existing.value) throw;
-        if (existing.value > 0) {
-            // Refund the failing bid
-            pendingWithdrawals[existing.bidder] += existing.value;
-        }
-        punkBids[punkIndex] = Bid(true, punkIndex, msg.sender, msg.value);
-        PunkBidEntered(punkIndex, msg.value, msg.sender);
-    }
-
-    function acceptBidForPunk(uint punkIndex, uint minPrice) {
-        if (punkIndex >= 10000) throw;
-        if (!allPunksAssigned) throw;                
-        if (punkIndexToAddress[punkIndex] != msg.sender) throw;
-        address seller = msg.sender;
-        Bid bid = punkBids[punkIndex];
-        if (bid.value == 0) throw;
-        if (bid.value < minPrice) throw;
-
-        punkIndexToAddress[punkIndex] = bid.bidder;
-        balanceOf[seller]--;
-        balanceOf[bid.bidder]++;
-        Transfer(seller, bid.bidder, 1);
-
-        punksOfferedForSale[punkIndex] = Offer(false, punkIndex, bid.bidder, 0, 0x0);
-        uint amount = bid.value;
-        punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
-        pendingWithdrawals[seller] += amount;
-        PunkBought(punkIndex, bid.value, seller, bid.bidder);
-    }
-
-    function withdrawBidForPunk(uint punkIndex) {
-        if (punkIndex >= 10000) throw;
-        if (!allPunksAssigned) throw;                
-        if (punkIndexToAddress[punkIndex] == 0x0) throw;
-        if (punkIndexToAddress[punkIndex] == msg.sender) throw;
-        Bid bid = punkBids[punkIndex];
-        if (bid.bidder != msg.sender) throw;
-        PunkBidWithdrawn(punkIndex, bid.value, msg.sender);
-        uint amount = bid.value;
-        punkBids[punkIndex] = Bid(false, punkIndex, 0x0, 0);
-        // Refund the bid money
-        msg.sender.transfer(amount);
-    }
-
 }
